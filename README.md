@@ -100,5 +100,4 @@ python grpo_coded.py                  # UPCOMING
 
 ---
 
-*Last Updated*: [Current Date]  
-*Repository*: DeepSeek Implementation from Scratch
+*Last Updated*: 9/18/2025  
