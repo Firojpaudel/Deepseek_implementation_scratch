@@ -13,6 +13,8 @@ This basically increases the complexity where we have to perform double normaliz
 
 The other way is the efficient way where we use masking to mask out the future tokens. This is done by adding a large negative number to the attention scores of the future tokens before applying softmax.
 This way we only have to perform one normalization.
+
+Also, we implement dropout after softmax to prevent overfitting. That will be in another class. Dropout might not be necessary here for simple data but to make lazy neurons fire up and prevent overfitting in large models, dropout is essential.
 """
 
 class CausalAttentionNaive(nn.Module):
@@ -132,6 +134,67 @@ class CausalAttentionEfficient(nn.Module):
         print(f"Shape: {context_vec.shape}")
         
         return context_vec
+
+class CausalAttentionWithDropout(nn.Module):
+    def __init__(self, d_in, d_out, qkv_bias=False, dropout_prob=0.5):
+        super().__init__()
+        self.W_query = nn.Linear(d_in, d_out, bias=qkv_bias)
+        self.W_key = nn.Linear(d_in, d_out, bias=qkv_bias)
+        self.W_value = nn.Linear(d_in, d_out, bias=qkv_bias)
+        self.dropout = nn.Dropout(dropout_prob)
+        
+    def forward(self, x):
+        print(f"\n{'='*60}")
+        print(f"CAUSAL ATTENTION WITH DROPOUT - STEP BY STEP")
+        print(f"{'='*60}")
+        
+        keys = self.W_key(x)
+        queries = self.W_query(x)
+        values = self.W_value(x)
+        
+        print(f"Input tensor shape: {x.shape}")
+        print(f"Keys shape: {keys.shape}")
+        print(f"Queries shape: {queries.shape}")
+        print(f"Values shape: {values.shape}")
+        
+        attn_scores = queries @ keys.transpose(-2, -1)
+        print(f"\nRaw attention scores (Q @ K^T):")
+        print(f"Shape: {attn_scores.shape}")
+        print(attn_scores)
+        
+        context_length = attn_scores.shape[0]
+        mask_efficient = torch.triu(torch.ones(context_length, context_length), diagonal=1)
+        print(f"\nUPPER TRIANGULAR MASK (Same as efficient approach):")
+        print(f"This mask identifies future token positions (1s) to be masked out")
+        print(mask_efficient)
+        
+        masked = attn_scores.masked_fill(mask_efficient.bool(), -torch.inf)
+        print(f"\n{'='*50} ATTENTION SCORES AFTER MASKING {'='*50}")
+        print(f"Future positions filled with -inf:")
+        print(masked)
+        
+        attn_weights = torch.softmax(masked / keys.shape[-1]**0.5, dim=-1)
+        print(f"\nAttention weights BEFORE dropout:")
+        print(attn_weights)
+        print(f"Row sums before dropout: {attn_weights.sum(dim=1)}")
+        
+        # Applying dropout to attention weights
+        print(f"\n{'='*50} APPLYING DROPOUT {'='*50}")
+        print(f"Dropout probability: {self.dropout.p}")
+        print(f"During training: randomly zeros out {self.dropout.p*100:.1f}% of attention weights")
+        print(f"Remaining weights are scaled by 1/{1-self.dropout.p:.2f} to maintain expected sum")
+        
+        attn_weights_dropped = self.dropout(attn_weights)
+        print(f"\nAttention weights AFTER dropout:")
+        print(attn_weights_dropped)
+        print(f"Row sums after dropout: {attn_weights_dropped.sum(dim=1)}")
+        print(f"Note: Sums may differ from 1.0 due to dropout during training")
+        
+        context_vec = attn_weights_dropped @ values
+        print(f"\nFinal context vectors (Dropped_Attention @ Values):")
+        print(f"Shape: {context_vec.shape}")
+        
+        return context_vec
     
 if __name__ == "__main__":
     # Test case for CausalAttentionNaive
@@ -190,3 +253,40 @@ if __name__ == "__main__":
     print(f"{'='*60}")
     print(f"Outputs are identical: {torch.allclose(output_naive, output_efficient, atol=1e-6)}")
     print(f"Maximum difference: {torch.max(torch.abs(output_naive - output_efficient)).item()}")
+    
+    # Test case for CausalAttentionWithDropout
+    # Initialize causal attention module (with dropout)
+    causal_attn_dropout = CausalAttentionWithDropout(d_in, d_out, qkv_bias=False, dropout_prob=0.3)
+    
+    # IMPORTANT: Copy weights from naive to dropout version for fair comparison
+    print(f"\nCopying weights from naive to dropout implementation for fair comparison...")
+    causal_attn_dropout.W_query.weight.data = causal_attn_naive.W_query.weight.data.clone()
+    causal_attn_dropout.W_key.weight.data = causal_attn_naive.W_key.weight.data.clone()
+    causal_attn_dropout.W_value.weight.data = causal_attn_naive.W_value.weight.data.clone()
+    
+    # Forward pass
+    print("\n" + "="*20 + " Causal Attention with Dropout " + "="*20 + "\n")
+    
+    # Set to training mode to see dropout effect
+    causal_attn_dropout.train()
+    output_dropout = causal_attn_dropout(x)
+    print(f"Output shape (With Dropout): {output_dropout.shape}")
+    print(f"Expected shape: ({context_length}, {d_out})")
+    
+    # Verify the output has correct dimensions
+    assert output_dropout.shape == (context_length, d_out), "Output shape mismatch!"
+    print("Test passed! Causal attention with dropout is working correctly.")
+    
+    # Display output for inspection
+    print(f"\nCausal Attention with Dropout output:\n{output_dropout}")
+    
+    # Test in evaluation mode (no dropout)
+    print(f"\n{'='*60}")
+    print(f"TESTING IN EVALUATION MODE (NO DROPOUT)")
+    print(f"{'='*60}")
+    causal_attn_dropout.eval()
+    with torch.no_grad():
+        output_dropout_eval = causal_attn_dropout(x)
+    
+    print(f"Outputs identical in eval mode: {torch.allclose(output_efficient, output_dropout_eval, atol=1e-6)}")
+    print(f"Max difference in eval mode: {torch.max(torch.abs(output_efficient - output_dropout_eval)).item()}")
